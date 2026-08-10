@@ -411,11 +411,15 @@ async function exportJPG(){
       ctx.restore();
     });
   }
-  // SITE label at centroid of selection
+  // SITE label at centroid of selection, with white knockout so it reads over the hatch
   if(selected.size){
     const cen=selectionCentroid(); if(cen){const[x,y]=px(cen[0],cen[1]);
       ctx.font=`700 ${Math.round(dpi*0.13)}px Arial`; ctx.textAlign='center'; ctx.textBaseline='middle';
-      ctx.lineWidth=Math.max(3,dpi/40); ctx.strokeStyle='#fff'; ctx.strokeText('SITE',x,y);
+      const tw=ctx.measureText('SITE').width, pad=dpi*0.03;
+      ctx.fillStyle='#fff';
+      ctx.fillRect(x-tw/2-pad, y-dpi*0.075-pad, tw+pad*2, dpi*0.15+pad*2);
+      ctx.strokeStyle='#000'; ctx.lineWidth=Math.max(1,dpi/300);
+      ctx.strokeRect(x-tw/2-pad, y-dpi*0.075-pad, tw+pad*2, dpi*0.15+pad*2);
       ctx.fillStyle='#000'; ctx.fillText('SITE',x,y);
     }
   }
@@ -464,8 +468,30 @@ function drawPoly(ctx,geom,px,site){
   polys.forEach(rings=>{
     ctx.beginPath();
     rings.forEach(ring=>{ ring.forEach((pt,i)=>{const[x,y]=px(pt[0],pt[1]); i?ctx.lineTo(x,y):ctx.moveTo(x,y);}); ctx.closePath(); });
-    if(site){ ctx.lineWidth=Math.max(2,200/150*2); ctx.stroke(); }
-    else ctx.stroke();
+    if(site){
+      // bounding box of this poly for the hatch sweep
+      let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+      rings[0].forEach(pt=>{const[x,y]=px(pt[0],pt[1]); if(x<minX)minX=x;if(y<minY)minY=y;if(x>maxX)maxX=x;if(y>maxY)maxY=y;});
+      const step=Math.max(4, ctx.canvas.width/180); // hatch spacing scales with DPI
+      ctx.save();
+      ctx.clip(); // clip to the site polygon
+      ctx.lineWidth=Math.max(1, ctx.canvas.width/1200);
+      ctx.strokeStyle='#000';
+      ctx.beginPath();
+      // 45° diagonals: x - y = c, sweep c across the bbox
+      for(let c=minX-(maxY-minY); c<=maxX; c+=step){
+        ctx.moveTo(c, minY);
+        ctx.lineTo(c+(maxY-minY), maxY);
+      }
+      ctx.stroke();
+      ctx.restore();
+      // bold outline on top
+      ctx.beginPath();
+      rings.forEach(ring=>{ ring.forEach((pt,i)=>{const[x,y]=px(pt[0],pt[1]); i?ctx.lineTo(x,y):ctx.moveTo(x,y);}); ctx.closePath(); });
+      ctx.lineWidth=Math.max(2, ctx.canvas.width/500); ctx.strokeStyle='#000'; ctx.stroke();
+    } else {
+      ctx.stroke();
+    }
   });
 }
 function selectionCentroid(){
