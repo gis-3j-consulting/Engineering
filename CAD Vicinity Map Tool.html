@@ -106,11 +106,11 @@
 
     <details class="adv">
       <summary>Data sources</summary>
-      <label class="row" for="taxUrl">Taxlot query URL</label>
-      <input type="text" id="taxUrl">
-      <label class="row" for="roadUrl">Road query URL</label>
-      <input type="text" id="roadUrl">
-      <p class="hint">Taxlots default to Metro RLIS (tri-county). Roads default to Oregon GEOHub OR-Trans. Swap these for county layers as needed. Road labels build from PREFIX + NAME + TYPE + SUFFIX.</p>
+      <label class="row" for="taxUrl">Taxlot FeatureServer URL</label>
+      <input type="text" id="taxUrl" placeholder="auto-resolved from item ID">
+      <label class="row" for="roadUrl">Road FeatureServer URL</label>
+      <input type="text" id="roadUrl" placeholder="auto-resolved from item ID">
+      <p class="hint">These auto-fill from Metro RLIS (taxlots, tri-county) and Oregon GEOHub OR-Trans (roads). To use a county layer, paste its full <code>…/FeatureServer/0</code> URL here. Road labels build from PREFIX + NAME + TYPE + SUFFIX.</p>
     </details>
   </aside>
 
@@ -122,15 +122,32 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-/* ---------- Config ---------- */
+/* ---------- Config ----------
+   Layers are resolved from their ArcGIS item IDs at runtime, so we never
+   hard-code a services{n}.arcgis.com host that might be wrong. The browser
+   calls arcgis.com/sharing/rest to get the live FeatureServer URL.
+   To use a different layer (e.g. a county taxlot service), either paste a
+   full .../FeatureServer/0 URL into the Data-sources box, or swap the item ID. */
 const CFG = {
-  taxUrl: "https://services.arcgis.com/uUvqNMGPm7axC2dD/ArcGIS/rest/services/Taxlots/FeatureServer/0/query",
-  roadUrl: "https://services2.arcgis.com/euUYvBAWTBYFOO9V/ArcGIS/rest/services/All_Public_Roads/FeatureServer/0/query",
+  taxItem:  "9d3c396ffad44649bc7451465aa300f0",   // Metro RLIS Taxlots (Public)
+  roadItem: "984da4596d084af4a3aa42cfaf562973",   // Oregon GEOHub OR-Trans All Public Roads
+  taxUrl:  "",   // optional manual override (full FeatureServer/<layer> URL)
+  roadUrl: "",
   road: { prefix:"PREFIX", name:"NAME", type:"TYPE", suffix:"SUFFIX",
           aliasPrefix:"ALIAS_PREFIX", aliasName:"ALIAS_NAME", aliasType:"ALIAS_TYPE", aliasSuffix:"ALIAS_SUFFIX",
           hwy:"HWYNUMB" },
   taxIdField: "OBJECTID"
 };
+
+/* Resolve an ArcGIS item ID to its FeatureServer layer-0 base URL. */
+async function resolveItemUrl(itemId){
+  const meta = await fetch(`https://www.arcgis.com/sharing/rest/content/items/${itemId}?f=json`).then(r=>r.json());
+  if(!meta || !meta.url) throw new Error(`Item ${itemId} has no service URL`);
+  let u = meta.url.replace(/\/+$/,'');
+  // Item URL may be the service root or already a layer; normalise to a layer endpoint.
+  if(/\/(Feature|Map)Server$/i.test(u)) u += '/0';
+  return u; // e.g. https://services.arcgis.com/.../FeatureServer/0
+}
 
 /* ---------- Map ---------- */
 const map = L.map('map', {preferCanvas:false, zoomControl:true}).setView([45.52,-122.68], 16);
@@ -200,11 +217,22 @@ let loadTimer=null;
 function scheduleLoad(){ clearTimeout(loadTimer); loadTimer=setTimeout(loadData,350); }
 map.on('moveend zoomend', scheduleLoad);
 
+let resolved = { tax:null, road:null };
+async function ensureUrls(){
+  const taxOverride=document.getElementById('taxUrl').value.trim();
+  const roadOverride=document.getElementById('roadUrl').value.trim();
+  if(taxOverride) resolved.tax = taxOverride.replace(/\/query$/,'');
+  else if(!resolved.tax){ status('Resolving taxlot layer…'); resolved.tax = await resolveItemUrl(CFG.taxItem); document.getElementById('taxUrl').value=resolved.tax; }
+  if(roadOverride) resolved.road = roadOverride.replace(/\/query$/,'');
+  else if(!resolved.road){ status('Resolving road layer…'); resolved.road = await resolveItemUrl(CFG.roadItem); document.getElementById('roadUrl').value=resolved.road; }
+}
+
 async function loadData(){
-  const taxUrl=document.getElementById('taxUrl').value.trim();
-  const roadUrl=document.getElementById('roadUrl').value.trim();
   status('Loading data…');
   try{
+    await ensureUrls();
+    const taxUrl = resolved.tax + '/query';
+    const roadUrl = resolved.road + '/query';
     const [tax,roads]=await Promise.all([esriQuery(taxUrl), esriQuery(roadUrl)]);
     // taxlots
     taxLayer.clearLayers(); taxLayer.addData(tax);
@@ -216,10 +244,14 @@ async function loadData(){
     status('');
   }catch(err){
     console.error(err);
-    status('Data error — check source URLs / network. '+err.message);
-    setTimeout(()=>status(''),4000);
+    status('Data error: '+err.message+' — try the Data-sources panel or check CORS/network.');
+    setTimeout(()=>status(''),6000);
   }
 }
+// Re-resolve if the user edits an override URL
+['taxUrl','roadUrl'].forEach(id=>{
+  document.getElementById(id).addEventListener('change',()=>{ resolved={tax:null,road:null}; loadData(); });
+});
 
 /* ---------- One label per unique street name, on its longest segment ---------- */
 function segLenDeg(coords){ // rough planar length in degrees, fine for ranking
@@ -397,8 +429,8 @@ function selectionCentroid(){
 }
 
 /* ---------- init ---------- */
-document.getElementById('taxUrl').value=CFG.taxUrl;
-document.getElementById('roadUrl').value=CFG.roadUrl;
+if(CFG.taxUrl) document.getElementById('taxUrl').value=CFG.taxUrl;
+if(CFG.roadUrl) document.getElementById('roadUrl').value=CFG.roadUrl;
 map.whenReady(()=>{ fitToScale(); loadData(); });
 </script>
 </body>
