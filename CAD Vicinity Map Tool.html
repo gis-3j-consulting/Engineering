@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vicinity Map Builder</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root{
+    --ink:#1a1a1a; --line:#d5d5d5; --panel:#f7f7f5; --panel2:#fff;
+    --accent:#2b5f5a; --accent-ink:#fff; --site:#c8352b; --muted:#6a6a6a;
+    --focus:#2b5f5a;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink)}
+  #app{display:grid;grid-template-columns:320px 1fr;height:100%}
+  @media (max-width:760px){#app{grid-template-columns:1fr;grid-template-rows:auto 1fr}}
+  aside{background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;padding:14px}
+  aside h1{font-size:15px;letter-spacing:.02em;margin:0 0 2px}
+  aside .sub{font-size:12px;color:var(--muted);margin:0 0 14px}
+  fieldset{border:1px solid var(--line);border-radius:8px;background:var(--panel2);margin:0 0 12px;padding:10px 12px 12px}
+  legend{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);padding:0 4px}
+  label.row{display:block;font-size:12px;margin:8px 0 4px;color:#333}
+  select,input[type=text],input[type=number]{width:100%;padding:7px 8px;border:1px solid var(--line);border-radius:6px;font-size:13px;background:#fff}
+  .inline{display:flex;gap:8px}
+  .inline>*{flex:1}
+  .check{display:flex;align-items:center;gap:8px;font-size:13px;margin:8px 0}
+  .check input{width:auto}
+  button{font:inherit;cursor:pointer;border-radius:6px;border:1px solid var(--line);background:#fff;padding:8px 10px;font-size:13px}
+  button:hover{border-color:#b5b5b5}
+  button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+  button.primary:hover{filter:brightness(1.08)}
+  button.wide{width:100%}
+  :focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+  .hint{font-size:11px;color:var(--muted);line-height:1.4;margin:6px 0 0}
+  .count{font-size:12px;color:#333;margin:6px 0}
+  .count b{color:var(--site)}
+  #map{height:100%}
+  .status{position:absolute;z-index:1000;left:50%;top:12px;transform:translateX(-50%);background:#fff;border:1px solid var(--line);border-radius:20px;padding:6px 14px;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);display:none}
+  .status.on{display:block}
+  details.adv summary{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);cursor:pointer}
+  details.adv{margin-top:4px}
+  .adv label.row{margin-top:10px}
+  .site-lot{color:var(--site);font-weight:600}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside>
+    <h1>Vicinity Map Builder</h1>
+    <p class="sub">Click taxlots to mark the site, then export a black-and-white JPG insert.</p>
+
+    <fieldset>
+      <legend>Site</legend>
+      <div class="count">Selected lots: <b id="lotCount">0</b></div>
+      <button class="wide" id="clearSel" type="button">Clear selection</button>
+      <p class="hint">Click a lot to add it. Click again to remove. All selected lots label once as “SITE.”</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Layout</legend>
+      <label class="row" for="size">Sheet size</label>
+      <select id="size">
+        <option value="letter-p">Letter portrait (8.5 × 11 in)</option>
+        <option value="letter-l">Letter landscape (11 × 8.5 in)</option>
+        <option value="sq4">Square (4 × 4 in)</option>
+        <option value="6x4">Landscape (6 × 4 in)</option>
+        <option value="custom">Custom…</option>
+      </select>
+      <div class="inline" id="customSize" style="display:none;margin-top:8px">
+        <div><label class="row" for="cw">Width (in)</label><input type="number" id="cw" value="6" min="1" step="0.5"></div>
+        <div><label class="row" for="ch">Height (in)</label><input type="number" id="ch" value="4" min="1" step="0.5"></div>
+      </div>
+
+      <label class="row" for="scale">Scale (1:n)</label>
+      <select id="scale">
+        <option value="1200">1:1,200</option>
+        <option value="2400" selected>1:2,400</option>
+        <option value="4800">1:4,800</option>
+        <option value="12000">1:12,000</option>
+        <option value="24000">1:24,000</option>
+      </select>
+
+      <label class="row" for="dpi">Export resolution</label>
+      <select id="dpi">
+        <option value="150">150 DPI</option>
+        <option value="200" selected>200 DPI</option>
+        <option value="300">300 DPI (print)</option>
+      </select>
+    </fieldset>
+
+    <fieldset>
+      <legend>Map elements</legend>
+      <div class="check"><input type="checkbox" id="cNorth" checked><label for="cNorth">North arrow</label></div>
+      <div class="check"><input type="checkbox" id="cScalebar" checked><label for="cScalebar">Scale bar</label></div>
+      <div class="check"><input type="checkbox" id="cLabels" checked><label for="cLabels">Road labels</label></div>
+      <label class="row" for="title">Title</label>
+      <input type="text" id="title" placeholder="e.g. VICINITY MAP">
+      <label class="row" for="subtitle">Subtitle</label>
+      <input type="text" id="subtitle" placeholder="e.g. Project name / date">
+    </fieldset>
+
+    <button class="primary wide" id="applyView" type="button">Fit view to scale &amp; size</button>
+    <div style="height:8px"></div>
+    <button class="primary wide" id="export" type="button">Export JPG</button>
+
+    <details class="adv">
+      <summary>Data sources</summary>
+      <label class="row" for="taxUrl">Taxlot query URL</label>
+      <input type="text" id="taxUrl">
+      <label class="row" for="roadUrl">Road query URL</label>
+      <input type="text" id="roadUrl">
+      <p class="hint">Taxlots default to Metro RLIS (tri-county). Roads default to Oregon GEOHub OR-Trans. Swap these for county layers as needed. Road labels build from PREFIX + NAME + TYPE + SUFFIX.</p>
+    </details>
+  </aside>
+
+  <div style="position:relative">
+    <div class="status" id="status">Loading…</div>
+    <div id="map"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/* ---------- Config ---------- */
+const CFG = {
+  taxUrl: "https://services.arcgis.com/uUvqNMGPm7axC2dD/ArcGIS/rest/services/Taxlots/FeatureServer/0/query",
+  roadUrl: "https://services2.arcgis.com/euUYvBAWTBYFOO9V/ArcGIS/rest/services/All_Public_Roads/FeatureServer/0/query",
+  road: { prefix:"PREFIX", name:"NAME", type:"TYPE", suffix:"SUFFIX",
+          aliasPrefix:"ALIAS_PREFIX", aliasName:"ALIAS_NAME", aliasType:"ALIAS_TYPE", aliasSuffix:"ALIAS_SUFFIX",
+          hwy:"HWYNUMB" },
+  taxIdField: "OBJECTID"
+};
+
+/* ---------- Map ---------- */
+const map = L.map('map', {preferCanvas:false, zoomControl:true}).setView([45.52,-122.68], 16);
+const base = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png',
+  {maxZoom:20, attribution:'© OpenStreetMap © CARTO', className:'basetiles'}).addTo(map);
+
+const statusEl = document.getElementById('status');
+function status(msg){ if(msg){statusEl.textContent=msg;statusEl.classList.add('on');} else statusEl.classList.remove('on'); }
+
+/* ---------- Layers ---------- */
+let roadLayer = L.geoJSON(null, {style:{color:'#000',weight:1.1}}).addTo(map);
+let taxLayer  = L.geoJSON(null, {
+  style:{color:'#000',weight:.6,fillOpacity:0,opacity:.35},
+  onEachFeature:(f,l)=>{ l.on('click',()=>toggleLot(f,l)); }
+}).addTo(map);
+let labelLayer = L.layerGroup().addTo(map);
+let siteLayer  = L.geoJSON(null, {style:{color:'var(--site)',weight:2,fillColor:'#c8352b',fillOpacity:.12}}).addTo(map);
+
+const selected = new Map();     // id -> {feature, srcLayer}
+function lotId(f){ return f.properties[CFG.taxIdField] ?? f.id ?? JSON.stringify(f.geometry).slice(0,40); }
+
+function refreshSite(){
+  siteLayer.clearLayers();
+  selected.forEach(({feature})=> siteLayer.addData(feature));
+  siteLayer.setStyle({color:'#c8352b',weight:2,fillColor:'#c8352b',fillOpacity:.12});
+  document.getElementById('lotCount').textContent = selected.size;
+  taxLayer.eachLayer(l=>{
+    const id = l.feature ? lotId(l.feature) : null;
+    l.setStyle(selected.has(id) ? {opacity:0,fillOpacity:0} : {color:'#000',weight:.6,opacity:.35,fillOpacity:0});
+  });
+}
+function toggleLot(f){
+  const id = lotId(f);
+  if(selected.has(id)) selected.delete(id); else selected.set(id,{feature:f});
+  refreshSite();
+}
+document.getElementById('clearSel').onclick=()=>{selected.clear();refreshSite();};
+
+/* ---------- Road label assembly ---------- */
+function assemble(p, keys){
+  return [p[keys[0]],p[keys[1]],p[keys[2]],p[keys[3]]]
+    .map(v=> (v==null?'':String(v).trim()))
+    .filter(Boolean).join(' ').replace(/\s+/g,' ').trim();
+}
+function roadLabel(p){
+  const r=CFG.road;
+  let n = assemble(p,[r.prefix,r.name,r.type,r.suffix]);
+  if(!n) n = assemble(p,[r.aliasPrefix,r.aliasName,r.aliasType,r.aliasSuffix]);
+  if(!n && p[r.hwy]) n = 'HWY '+String(p[r.hwy]).trim();
+  return n;
+}
+
+/* ---------- Fetch by extent ---------- */
+function bboxParam(){
+  const b=map.getBounds();
+  return {geometry:`${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`,
+          geometryType:'esriGeometryEnvelope', inSR:4326, spatialRel:'esriSpatialRelIntersects'};
+}
+async function esriQuery(url, extraOut){
+  const p=new URLSearchParams({f:'geojson', where:'1=1', outFields:'*', outSR:4326, returnGeometry:'true', ...bboxParam()});
+  const res = await fetch(url+'?'+p.toString());
+  if(!res.ok) throw new Error(url+' → '+res.status);
+  return res.json();
+}
+
+let loadTimer=null;
+function scheduleLoad(){ clearTimeout(loadTimer); loadTimer=setTimeout(loadData,350); }
+map.on('moveend zoomend', scheduleLoad);
+
+async function loadData(){
+  const taxUrl=document.getElementById('taxUrl').value.trim();
+  const roadUrl=document.getElementById('roadUrl').value.trim();
+  status('Loading data…');
+  try{
+    const [tax,roads]=await Promise.all([esriQuery(taxUrl), esriQuery(roadUrl)]);
+    // taxlots
+    taxLayer.clearLayers(); taxLayer.addData(tax);
+    refreshSite();
+    // roads
+    roadLayer.clearLayers(); roadLayer.addData(roads);
+    roadLayer.setStyle({color:'#000',weight:1.1});
+    buildLabels(roads);
+    status('');
+  }catch(err){
+    console.error(err);
+    status('Data error — check source URLs / network. '+err.message);
+    setTimeout(()=>status(''),4000);
+  }
+}
+
+/* ---------- One label per unique street name, on its longest segment ---------- */
+function segLenDeg(coords){ // rough planar length in degrees, fine for ranking
+  let s=0; for(let i=1;i<coords.length;i++){const a=coords[i-1],b=coords[i];s+=Math.hypot(b[0]-a[0],b[1]-a[1]);} return s;
+}
+function midpoint(geom){
+  let lines = geom.type==='LineString' ? [geom.coordinates] : geom.coordinates;
+  // pick longest line, then its middle vertex
+  let best=lines[0], bl=-1;
+  lines.forEach(l=>{const L=segLenDeg(l); if(L>bl){bl=L;best=l;}});
+  const m=best[Math.floor(best.length/2)];
+  return {latlng:[m[1],m[0]], len:bl};
+}
+function buildLabels(fc){
+  labelLayer.clearLayers();
+  if(!document.getElementById('cLabels').checked) return;
+  const byName=new Map();
+  (fc.features||[]).forEach(f=>{
+    const name=roadLabel(f.properties||{});
+    if(!name||!f.geometry) return;
+    const {latlng,len}=midpoint(f.geometry);
+    const cur=byName.get(name);
+    if(!cur||len>cur.len) byName.set(name,{latlng,len});
+  });
+  byName.forEach((v,name)=>{
+    L.marker(v.latlng,{interactive:false,icon:L.divIcon({
+      className:'rlabel',
+      html:`<span style="font:600 11px/1.1 Arial;color:#000;text-shadow:-1.5px -1.5px 0 #fff,1.5px -1.5px 0 #fff,-1.5px 1.5px 0 #fff,1.5px 1.5px 0 #fff;white-space:nowrap">${name}</span>`,
+      iconSize:[1,1]
+    })}).addTo(labelLayer);
+  });
+}
+document.getElementById('cLabels').onchange=()=>{ roadLayer.toJSON&&0; loadData(); };
+
+/* ---------- Sheet size / scale ---------- */
+const SIZES={ 'letter-p':[8.5,11],'letter-l':[11,8.5],'sq4':[4,4],'6x4':[6,4] };
+document.getElementById('size').onchange=e=>{
+  document.getElementById('customSize').style.display = e.target.value==='custom'?'flex':'none';
+};
+function sheetInches(){
+  const v=document.getElementById('size').value;
+  if(v==='custom') return [ +document.getElementById('cw').value||6, +document.getElementById('ch').value||4 ];
+  return SIZES[v];
+}
+// meters of ground shown across the sheet width at chosen scale
+function groundWidthMeters(){
+  const [win]=sheetInches();
+  const scale=+document.getElementById('scale').value;
+  return (win/39.3701)*scale; // inches→m ×scale
+}
+document.getElementById('applyView').onclick=fitToScale;
+function fitToScale(){
+  const [win,hin]=sheetInches();
+  const scale=+document.getElementById('scale').value;
+  const c=map.getCenter();
+  const halfW=(win/39.3701)*scale/2, halfH=(hin/39.3701)*scale/2;
+  const mPerDegLat=111320, mPerDegLon=111320*Math.cos(c.lat*Math.PI/180);
+  const b=L.latLngBounds([c.lat-halfH/mPerDegLat,c.lng-halfW/mPerDegLon],
+                         [c.lat+halfH/mPerDegLat,c.lng+halfW/mPerDegLon]);
+  map.fitBounds(b,{animate:false});
+}
+
+/* ---------- Export ---------- */
+function niceScaleBar(groundM){
+  const targets=[10,20,25,50,100,150,200,250,300,400,500,750,1000,1500,2000,3000,5000];
+  const want=groundM*0.25; let best=targets[0];
+  targets.forEach(t=>{ if(Math.abs(t-want)<Math.abs(best-want)) best=t; });
+  return best;
+}
+document.getElementById('export').onclick=exportJPG;
+async function exportJPG(){
+  status('Rendering…');
+  const [win,hin]=sheetInches();
+  const dpi=+document.getElementById('dpi').value;
+  const W=Math.round(win*dpi), H=Math.round(hin*dpi);
+  const titleTxt=document.getElementById('title').value.trim();
+  const subTxt=document.getElementById('subtitle').value.trim();
+  const marginTop = titleTxt? Math.round(dpi*0.55):0;
+
+  const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
+  const ctx=cv.getContext('2d');
+  ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H);
+
+  const mapW=W, mapH=H-marginTop;
+  const b=map.getBounds(), c=map.getCenter();
+  const west=b.getWest(),east=b.getEast(),north=b.getNorth(),south=b.getSouth();
+  const px=(lng,lat)=>[ (lng-west)/(east-west)*mapW, marginTop+(north-lat)/(north-south)*mapH ];
+
+  // roads black
+  ctx.strokeStyle='#000'; ctx.lineWidth=Math.max(1,dpi/150); ctx.lineJoin='round';
+  roadLayer.eachLayer(l=>{
+    const g=l.feature.geometry; const lines=g.type==='LineString'?[g.coordinates]:g.coordinates;
+    lines.forEach(line=>{ ctx.beginPath(); line.forEach((pt,i)=>{const[x,y]=px(pt[0],pt[1]); i?ctx.lineTo(x,y):ctx.moveTo(x,y);}); ctx.stroke(); });
+  });
+  // taxlots light
+  ctx.strokeStyle='#000'; ctx.lineWidth=Math.max(.5,dpi/300);
+  taxLayer.eachLayer(l=>{ drawPoly(ctx,l.feature.geometry,px,false); });
+  // site emphasized
+  siteLayer.eachLayer(l=>{ drawPoly(ctx,l.feature.geometry,px,true); });
+
+  // road labels
+  if(document.getElementById('cLabels').checked){
+    ctx.font=`600 ${Math.round(dpi*0.085)}px Arial`; ctx.textAlign='center'; ctx.textBaseline='middle';
+    labelLayer.eachLayer(m=>{
+      const ll=m.getLatLng(); const[x,y]=px(ll.lng,ll.lat);
+      const t=m.options.icon.options.html.replace(/<[^>]+>/g,'');
+      ctx.lineWidth=Math.max(2,dpi/60); ctx.strokeStyle='#fff'; ctx.strokeText(t,x,y);
+      ctx.fillStyle='#000'; ctx.fillText(t,x,y);
+    });
+  }
+  // SITE label at centroid of selection
+  if(selected.size){
+    const cen=selectionCentroid(); if(cen){const[x,y]=px(cen[0],cen[1]);
+      ctx.font=`700 ${Math.round(dpi*0.13)}px Arial`; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.lineWidth=Math.max(3,dpi/40); ctx.strokeStyle='#fff'; ctx.strokeText('SITE',x,y);
+      ctx.fillStyle='#000'; ctx.fillText('SITE',x,y);
+    }
+  }
+
+  // title / subtitle
+  if(titleTxt){
+    ctx.fillStyle='#000'; ctx.textAlign='center'; ctx.textBaseline='alphabetic';
+    ctx.font=`700 ${Math.round(dpi*0.22)}px Arial`; ctx.fillText(titleTxt, W/2, dpi*0.30);
+    if(subTxt){ ctx.font=`400 ${Math.round(dpi*0.11)}px Arial`; ctx.fillText(subTxt, W/2, dpi*0.48); }
+  }
+
+  // north arrow
+  if(document.getElementById('cNorth').checked){
+    const nx=W-dpi*0.55, ny=marginTop+dpi*0.55, s=dpi*0.28;
+    ctx.fillStyle='#000'; ctx.strokeStyle='#000'; ctx.lineWidth=Math.max(1,dpi/200);
+    ctx.beginPath(); ctx.moveTo(nx,ny-s); ctx.lineTo(nx+s*0.4,ny+s*0.5); ctx.lineTo(nx,ny+s*0.25); ctx.lineTo(nx-s*0.4,ny+s*0.5); ctx.closePath(); ctx.fill();
+    ctx.font=`700 ${Math.round(dpi*0.11)}px Arial`; ctx.textAlign='center'; ctx.fillText('N', nx, ny-s-dpi*0.06);
+  }
+
+  // scale bar
+  if(document.getElementById('cScalebar').checked){
+    const groundM=groundWidthMeters();
+    const barM=niceScaleBar(groundM);
+    const barPx=barM/groundM*mapW;
+    const bx=dpi*0.4, by=H-dpi*0.4;
+    ctx.strokeStyle='#000'; ctx.fillStyle='#000'; ctx.lineWidth=Math.max(1,dpi/200);
+    ctx.beginPath(); ctx.moveTo(bx,by); ctx.lineTo(bx+barPx,by); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(bx,by-dpi*0.05); ctx.lineTo(bx,by+dpi*0.05);
+    ctx.moveTo(bx+barPx,by-dpi*0.05); ctx.lineTo(bx+barPx,by+dpi*0.05); ctx.stroke();
+    const ft=Math.round(barM*3.28084);
+    ctx.font=`400 ${Math.round(dpi*0.09)}px Arial`; ctx.textAlign='left'; ctx.textBaseline='bottom';
+    ctx.fillText(`${ft} ft  (1:${(+document.getElementById('scale').value).toLocaleString()})`, bx, by-dpi*0.07);
+  }
+
+  // frame
+  ctx.strokeStyle='#000'; ctx.lineWidth=Math.max(1,dpi/150);
+  ctx.strokeRect(dpi*0.06,dpi*0.06,W-dpi*0.12,H-dpi*0.12);
+
+  cv.toBlob(bl=>{
+    const a=document.createElement('a'); a.href=URL.createObjectURL(bl);
+    a.download='vicinity_map.jpg'; a.click(); URL.revokeObjectURL(a.href); status('');
+  },'image/jpeg',0.92);
+}
+function drawPoly(ctx,geom,px,site){
+  const polys = geom.type==='Polygon'?[geom.coordinates]:geom.coordinates;
+  polys.forEach(rings=>{
+    ctx.beginPath();
+    rings.forEach(ring=>{ ring.forEach((pt,i)=>{const[x,y]=px(pt[0],pt[1]); i?ctx.lineTo(x,y):ctx.moveTo(x,y);}); ctx.closePath(); });
+    if(site){ ctx.lineWidth=Math.max(2,200/150*2); ctx.stroke(); }
+    else ctx.stroke();
+  });
+}
+function selectionCentroid(){
+  let sx=0,sy=0,n=0;
+  selected.forEach(({feature})=>{
+    const g=feature.geometry; const polys=g.type==='Polygon'?[g.coordinates]:g.coordinates;
+    polys.forEach(rings=>rings[0].forEach(pt=>{sx+=pt[0];sy+=pt[1];n++;}));
+  });
+  return n?[sx/n,sy/n]:null;
+}
+
+/* ---------- init ---------- */
+document.getElementById('taxUrl').value=CFG.taxUrl;
+document.getElementById('roadUrl').value=CFG.roadUrl;
+map.whenReady(()=>{ fitToScale(); loadData(); });
+</script>
+</body>
+</html>
