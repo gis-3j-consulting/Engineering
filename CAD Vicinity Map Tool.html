@@ -106,11 +106,15 @@
 
     <details class="adv">
       <summary>Data sources</summary>
-      <label class="row" for="taxUrl">Taxlot FeatureServer URL</label>
-      <input type="text" id="taxUrl" placeholder="auto-resolved from item ID">
-      <label class="row" for="roadUrl">Road FeatureServer URL</label>
-      <input type="text" id="roadUrl" placeholder="auto-resolved from item ID">
-      <p class="hint">These auto-fill from Metro RLIS (taxlots, tri-county) and Oregon GEOHub OR-Trans (roads). To use a county layer, paste its full <code>…/FeatureServer/0</code> URL here. Road labels build from PREFIX + NAME + TYPE + SUFFIX.</p>
+      <label class="row" for="taxSource">Taxlot source (county)</label>
+      <select id="taxSource"></select>
+      <label class="row" for="taxUrl">…or paste taxlot FeatureServer URL</label>
+      <input type="text" id="taxUrl" placeholder="https://…/FeatureServer/0">
+      <label class="row" for="roadSource">Road source</label>
+      <select id="roadSource"></select>
+      <label class="row" for="roadUrl">…or paste road FeatureServer URL</label>
+      <input type="text" id="roadUrl" placeholder="https://…/MapServer/164">
+      <p class="hint">Oregon taxlots are per-county. Pick your county or paste its <code>…/FeatureServer/&lt;layer&gt;</code> URL. Roads default to statewide ODOT OR-Trans. Road labels build from PREFIX + NAME + TYPE + SUFFIX.</p>
     </details>
   </aside>
 
@@ -123,31 +127,26 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 /* ---------- Config ----------
-   Layers are resolved from their ArcGIS item IDs at runtime, so we never
-   hard-code a services{n}.arcgis.com host that might be wrong. The browser
-   calls arcgis.com/sharing/rest to get the live FeatureServer URL.
-   To use a different layer (e.g. a county taxlot service), either paste a
-   full .../FeatureServer/0 URL into the Data-sources box, or swap the item ID. */
+   Direct FeatureServer layer URLs (verified). No item-ID guessing.
+   Taxlots vary by county in Oregon, so we ship a small picker plus a manual box.
+   Roads use the statewide ODOT/GEOHub OR-Trans layer. */
+const TAXLOT_SOURCES = {
+  "Metro RLIS (Clackamas/Multnomah/Washington)": {url:"https://services2.arcgis.com/McQ0OlIABe29rJJy/arcgis/rest/services/Taxlots_(Public)/FeatureServer/3", idField:"FID"},
+  "Umatilla County": {url:"https://services3.arcgis.com/tNPgIZWOB0Efvm0g/ArcGIS/rest/services/Tax_Lots/FeatureServer/0", idField:"OBJECTID"},
+  "Benton County":   {url:"https://gis.co.benton.or.us/arcgis/rest/services/Public/TaxlotService/FeatureServer/189", idField:"OBJECTID"},
+  "Wasco County":    {url:"https://public.co.wasco.or.us/gisserver/rest/services/Taxlots/FeatureServer/0", idField:"OBJECTID"},
+  "Custom / paste URL below": {url:"", idField:"OBJECTID"}
+};
+const ROAD_SOURCES = {
+  "ODOT OR-Trans (statewide)": "https://gis.odot.state.or.us/arcgis1006/rest/services/transgis/catalog/MapServer/164",
+  "Custom / paste URL below": ""
+};
 const CFG = {
-  taxItem:  "9d3c396ffad44649bc7451465aa300f0",   // Metro RLIS Taxlots (Public)
-  roadItem: "984da4596d084af4a3aa42cfaf562973",   // Oregon GEOHub OR-Trans All Public Roads
-  taxUrl:  "",   // optional manual override (full FeatureServer/<layer> URL)
-  roadUrl: "",
   road: { prefix:"PREFIX", name:"NAME", type:"TYPE", suffix:"SUFFIX",
           aliasPrefix:"ALIAS_PREFIX", aliasName:"ALIAS_NAME", aliasType:"ALIAS_TYPE", aliasSuffix:"ALIAS_SUFFIX",
           hwy:"HWYNUMB" },
-  taxIdField: "OBJECTID"
+  taxIdField: "FID"   // updated per selected source at runtime
 };
-
-/* Resolve an ArcGIS item ID to its FeatureServer layer-0 base URL. */
-async function resolveItemUrl(itemId){
-  const meta = await fetch(`https://www.arcgis.com/sharing/rest/content/items/${itemId}?f=json`).then(r=>r.json());
-  if(!meta || !meta.url) throw new Error(`Item ${itemId} has no service URL`);
-  let u = meta.url.replace(/\/+$/,'');
-  // Item URL may be the service root or already a layer; normalise to a layer endpoint.
-  if(/\/(Feature|Map)Server$/i.test(u)) u += '/0';
-  return u; // e.g. https://services.arcgis.com/.../FeatureServer/0
-}
 
 /* ---------- Map ---------- */
 const map = L.map('map', {preferCanvas:false, zoomControl:true}).setView([45.52,-122.68], 16);
@@ -218,19 +217,23 @@ function scheduleLoad(){ clearTimeout(loadTimer); loadTimer=setTimeout(loadData,
 map.on('moveend zoomend', scheduleLoad);
 
 let resolved = { tax:null, road:null };
-async function ensureUrls(){
+function ensureUrls(){
+  const taxSel=document.getElementById('taxSource').value;
+  const roadSel=document.getElementById('roadSource').value;
   const taxOverride=document.getElementById('taxUrl').value.trim();
   const roadOverride=document.getElementById('roadUrl').value.trim();
-  if(taxOverride) resolved.tax = taxOverride.replace(/\/query$/,'');
-  else if(!resolved.tax){ status('Resolving taxlot layer…'); resolved.tax = await resolveItemUrl(CFG.taxItem); document.getElementById('taxUrl').value=resolved.tax; }
-  if(roadOverride) resolved.road = roadOverride.replace(/\/query$/,'');
-  else if(!resolved.road){ status('Resolving road layer…'); resolved.road = await resolveItemUrl(CFG.roadItem); document.getElementById('roadUrl').value=resolved.road; }
+  const taxSrc=TAXLOT_SOURCES[taxSel];
+  resolved.tax = (taxSrc && taxSrc.url ? taxSrc.url : taxOverride).replace(/\/query$/,'');
+  CFG.taxIdField = taxSrc && taxSrc.url ? taxSrc.idField : 'OBJECTID';
+  resolved.road = (ROAD_SOURCES[roadSel] || roadOverride).replace(/\/query$/,'');
+  if(!resolved.tax) throw new Error('No taxlot URL — pick a county or paste a FeatureServer URL');
+  if(!resolved.road) throw new Error('No road URL — pick a source or paste a URL');
 }
 
 async function loadData(){
   status('Loading data…');
   try{
-    await ensureUrls();
+    ensureUrls();
     const taxUrl = resolved.tax + '/query';
     const roadUrl = resolved.road + '/query';
     const [tax,roads]=await Promise.all([esriQuery(taxUrl), esriQuery(roadUrl)]);
@@ -248,8 +251,8 @@ async function loadData(){
     setTimeout(()=>status(''),6000);
   }
 }
-// Re-resolve if the user edits an override URL
-['taxUrl','roadUrl'].forEach(id=>{
+// Reload when any source picker or override changes
+['taxUrl','roadUrl','taxSource','roadSource'].forEach(id=>{
   document.getElementById(id).addEventListener('change',()=>{ resolved={tax:null,road:null}; loadData(); });
 });
 
@@ -429,8 +432,14 @@ function selectionCentroid(){
 }
 
 /* ---------- init ---------- */
-if(CFG.taxUrl) document.getElementById('taxUrl').value=CFG.taxUrl;
-if(CFG.roadUrl) document.getElementById('roadUrl').value=CFG.roadUrl;
+function fillSelect(id, obj){
+  const s=document.getElementById(id);
+  Object.keys(obj).forEach(k=>{ const o=document.createElement('option'); o.value=k; o.textContent=k; s.appendChild(o); });
+}
+fillSelect('taxSource', TAXLOT_SOURCES);
+fillSelect('roadSource', ROAD_SOURCES);
+// Default map over Portland metro (RLIS tri-county coverage)
+map.setView([45.523, -122.676], 16);
 map.whenReady(()=>{ fitToScale(); loadData(); });
 </script>
 </body>
